@@ -58,7 +58,7 @@ socket_t setup_listening_socket(unsigned int port) {
     return l_socket;
 }
 
-duplex_socket_t initialize_duplex_connection(socket_t, unsigned int target_port) {
+duplex_socket_t initialize_duplex_connection(socket_t l_socket, unsigned int target_port) {
     duplex_socket_t duplex;
     duplex.recv = -1;
     duplex.send = -1;
