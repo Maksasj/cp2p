@@ -12,45 +12,38 @@
 #define MAXCLIENTS 10
 #define MAXCONNECTIONS 10
 
-int findemptyuser(int c_sockets[]){
-    int i;
-    for (i = 0; i <  MAXCLIENTS; i++){
-        if (c_sockets[i] == -1){
-            return i;
-        }
-    }
-    return -1;
-}
+unsigned int get_port(char* port_string) {
+    unsigned int port = atoi(port_string);
 
-int main(int argc, char *argv[]){
-    int l_socket; // Self listening socket
-    int s_sockets[MAXCONNECTIONS];
-    int c_sockets[MAXCLIENTS];
-
-    // Usage
-    // if (argc != 2){
-    //     fprintf(stderr, "USAGE: %s <port>\n", argv[0]);
-    //     return -1;
-    // }
-
-    // Check port
-    unsigned int port = atoi(argv[1]);
     if ((port < 1) || (port > 65535)){
         fprintf(stderr, "ERROR #1: invalid port specified.\n");
-        return -1;
+        exit(1);
     }
 
-    if ((l_socket = socket(AF_INET, SOCK_STREAM,0)) < 0){
-        fprintf(stderr, "ERROR #2: cannot create listening socket.\n");
-        return -1;
-    }
+    return port;
+}
 
-    // Setup listening port
+typedef unsigned int socket_t;
+
+typedef struct {
+    socket_t recv;
+    socket_t send;
+} duplex_socket_t;
+
+socket_t setup_listening_socket(unsigned int port) {
+    socket_t l_socket; // Self listening socket
+
+    // Setup listening socket
     struct sockaddr_in servaddr;
     memset(&servaddr,0, sizeof(servaddr));
     servaddr.sin_family = AF_INET;
     servaddr.sin_addr.s_addr = htonl(INADDR_ANY); 
     servaddr.sin_port = htons(port);
+
+    if ((l_socket = socket(AF_INET, SOCK_STREAM,0)) < 0){
+        fprintf(stderr, "ERROR #2: cannot create listening socket.\n");
+        return -1;
+    }
 
     if (bind(l_socket, (struct sockaddr *)&servaddr,sizeof(servaddr)) < 0){
         fprintf(stderr, "ERROR #3: bind listening socket.\n");
@@ -60,61 +53,106 @@ int main(int argc, char *argv[]){
     if (listen(l_socket, 5) < 0){
         fprintf(stderr, "ERROR #4: error in listen().\n");
         return -1;
-    }                           
+    }     
 
-    for (int i = 0; i < MAXCLIENTS; i++)
-        c_sockets[i] = -1;
+    return l_socket;
+}
 
-    for (int i = 0; i < MAXCONNECTIONS; i++)
-        s_sockets[i] = -1;
+duplex_socket_t initialize_duplex_connection(socket_t, unsigned int target_port) {
+    duplex_socket_t duplex;
+    duplex.recv = -1;
+    duplex.send = -1;
 
-    // Connect to other node if can
-    if(argc == 3) {
-        unsigned int thisport = atoi(argv[2]);
-    
-        struct sockaddr_in servaddr;
-        memset(&servaddr,0, sizeof(servaddr));
-        servaddr.sin_family = AF_INET;
-        servaddr.sin_port = htons(thisport);
+    struct sockaddr_in servaddr;
+    memset(&servaddr,0, sizeof(servaddr));
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_port = htons(target_port);
 
-        if ((s_sockets[0] = socket(AF_INET, SOCK_STREAM, 0))< 0){
-            fprintf(stderr,"ERROR #2: cannot create socket.\n");
-            exit(1);
-        }
-
-        if (inet_aton("127.0.0.1", &servaddr.sin_addr) <= 0 ) {
-            fprintf(stderr,"ERROR #3: Invalid remote IP address.\n");
-            exit(1);
-        }
-
-        if (connect(s_sockets[0],(struct sockaddr*)&servaddr,sizeof(servaddr)) < 0){
-            fprintf(stderr,"ERROR #4: error in connect().\n");
-            exit(1);
-        }
+    if ((duplex.send = socket(AF_INET, SOCK_STREAM, 0))< 0){
+        fprintf(stderr,"ERROR #2: cannot create socket.\n");
+        exit(1);
     }
+
+    if (inet_aton("127.0.0.1", &servaddr.sin_addr) <= 0 ) {
+        fprintf(stderr,"ERROR #3: Invalid remote IP address.\n");
+        exit(1);
+    }
+
+    if (connect(duplex.send, (struct sockaddr*)&servaddr,sizeof(servaddr)) < 0){
+        fprintf(stderr,"ERROR #4: error in connect().\n");
+        exit(1);
+    }
+
+    struct sockaddr_in clientaddr;
+    unsigned int clientaddrlen = sizeof(clientaddr);
+    memset(&clientaddr, 0, clientaddrlen);
+    duplex.recv = accept(l_socket, (struct sockaddr*) &clientaddr, &clientaddrlen);
+
+    return duplex;
+}
+
+
+duplex_socket_t handle_incoming_duplex_connection(socket_t l_socket) {
+    duplex_socket_t duplex;
+    duplex.recv = -1;
+    duplex.send = -1;
+
+    // Accept listening and setup as duplex recv
+    struct sockaddr_in clientaddr;
+    unsigned int clientaddrlen = sizeof(clientaddr);
+    memset(&clientaddr, 0, clientaddrlen);
+
+    duplex.recv = accept(l_socket, (struct sockaddr*) &clientaddr, &clientaddrlen);
+    printf("Accepting connection from:  %s\n", inet_ntoa(clientaddr.sin_addr));
+    printf("Created recv duplex\n");
+
+    struct sockaddr_in servaddr;
+    memset(&servaddr,0, sizeof(servaddr));
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_port = htons(11111);
+
+    // Create send socket
+    if ((duplex.send = socket(AF_INET, SOCK_STREAM, 0))< 0) {
+        fprintf(stderr,"ERROR #2: cannot create socket.\n");
+        exit(1);
+    }
+
+    if (inet_aton(inet_ntoa(clientaddr.sin_addr), &servaddr.sin_addr) <= 0 ) {
+        fprintf(stderr,"ERROR #3: Invalid remote IP address.\n");
+        exit(1);
+    }
+
+    if (connect(duplex.send, (struct sockaddr*)&servaddr,sizeof(servaddr)) < 0){
+        fprintf(stderr,"ERROR #4: error in connect().\n");
+        exit(1);
+    }
+
+    printf("Created send duplex\n");
+
+    return duplex;
+}
+
+int main(int argc, char *argv[]){
+    unsigned int port = get_port(argv[1]);
+    socket_t l_socket = setup_listening_socket(port);
+
+    duplex_socket_t duplex;
+    duplex.recv = -1;
+    duplex.send = -1;
+
+    // establish connection request
+    if(argc == 3)
+       duplex = initialize_duplex_connection(l_socket, get_port(argv[2]));
 
     int maxfd = 0;
     for (;;){
         fd_set read_set;
         FD_ZERO(&read_set);
 
-        // Bind client sockets
-        for (int i = 0; i < MAXCLIENTS; i++){
-            if (c_sockets[i] != -1){
-                FD_SET(c_sockets[i], &read_set);
-                if (c_sockets[i] > maxfd){
-                    maxfd = c_sockets[i];
-                }
-            }
-        }
-
-        // Bind connections sockets        
-        for (int i = 0; i < MAXCONNECTIONS; i++){
-            if (s_sockets[i] != -1){
-                FD_SET(s_sockets[i], &read_set);
-                if (s_sockets[i] > maxfd){
-                    maxfd = s_sockets[i];
-                }
+        if(duplex.recv != -1) {
+            FD_SET(duplex.recv, &read_set);
+            if (duplex.recv > maxfd){
+                maxfd = duplex.recv;
             }
         }
 
@@ -125,55 +163,35 @@ int main(int argc, char *argv[]){
         
         select(maxfd + 1, &read_set, NULL, NULL, NULL);
 
-        if (FD_ISSET(l_socket, &read_set)){
-            int client_id = findemptyuser(c_sockets);
-            
-            if (client_id != -1){
-                struct sockaddr_in clientaddr;
-                unsigned int clientaddrlen = sizeof(clientaddr);
-
-                memset(&clientaddr, 0, clientaddrlen);
-                c_sockets[client_id] = accept(l_socket, (struct sockaddr*) &clientaddr, &clientaddrlen);
-                printf("Connected:  %s\n",inet_ntoa(clientaddr.sin_addr));
+        // handle incoming request
+        if(duplex.recv == -1 && duplex.send == -1) {
+            if (FD_ISSET(l_socket, &read_set)){
+                duplex = handle_incoming_duplex_connection(l_socket);
             }
         }
 
-
-        for(int i = 0; i < MAXCONNECTIONS; i++) {
-            if(s_sockets[i] == -1)
-                continue;
-
-            if (FD_ISSET(c_sockets[i], &read_set)){
-                char recvbuffer[BUFFLEN] = "Poggers";
-
-                memset(&recvbuffer,0,BUFFLEN);
-                int i = read(s_sockets[i], &recvbuffer, BUFFLEN);
-                printf("%s\n",recvbuffer);
-            }
-        }       
-
-        for (int i = 0; i < MAXCLIENTS; i++){
-            if (c_sockets[i] == -1)
-                continue;
-
-            if (FD_ISSET(c_sockets[i], &read_set)){
-                // Process node
+        // accept message from duplex
+        if(duplex.recv != -1) {
+            if (FD_ISSET(duplex.recv, &read_set)) {
                 char buffer[BUFFLEN];
 
                 memset(&buffer,0,BUFFLEN);
-                int r_len = recv(c_sockets[i],&buffer,BUFFLEN,0);
+                int r_len = recv(duplex.recv, &buffer,BUFFLEN,0);
 
-                for (int j = 0; j < MAXCLIENTS; j++){
-                    if (c_sockets[j] == -1)
-                        continue;
+                printf("Recived message from duplex port thing: %s\n", buffer);
+            }
+        }
 
-                    int w_len = send(c_sockets[j], buffer, r_len,0);
+        // send message to duplex
+        if(duplex.send != -1) {
+            char buffer[100] = { '\0' };
+            sprintf(buffer, "This is message from %s", argv[1]);
 
-                    if (w_len <= 0){
-                        close(c_sockets[j]);
-                        c_sockets[j] = -1;
-                    }
-                }
+            int w_len = send(duplex.send, buffer, sizeof(buffer), 0);
+
+            if (w_len <= 0){
+                printf("Failed to send");
+                exit(1);
             }
         }
     }
