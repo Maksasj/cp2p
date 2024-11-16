@@ -1,11 +1,11 @@
-#include <arpa/inet.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <sys/select.h>
-#include <string.h>
-#include <unistd.h>
+#define SOCK_IMPLEMENETATION
+#include "sock.h"
+
+#define HAUL_IMPLEMENTATION
+#include "haul/haul.h"
+
+#define TRITON_IMPLEMENTATION
+#include "triton/triton.h"
 
 #define BUFFLEN 1024
 
@@ -23,176 +23,119 @@ unsigned int get_port(char* port_string) {
     return port;
 }
 
-typedef unsigned int socket_t;
+typedef struct {
+    sock_t listen;
+
+    vector_t sockets;
+} node_state_t;
+
+typedef enum {
+    NODE_MASTER,
+    NODE_SLAVE
+} node_type_t;
 
 typedef struct {
-    socket_t recv;
-    socket_t send;
-} duplex_socket_t;
+    node_type_t type;
+    port_t port;
 
-socket_t setup_listening_socket(unsigned int port) {
-    socket_t l_socket; // Self listening socket
+    port_t connect;
+} node_config_t;
 
-    // Setup listening socket
-    struct sockaddr_in servaddr;
-    memset(&servaddr,0, sizeof(servaddr));
-    servaddr.sin_family = AF_INET;
-    servaddr.sin_addr.s_addr = htonl(INADDR_ANY); 
-    servaddr.sin_port = htons(port);
+void load_node_config(node_config_t* config, const char* file_path) {
+    FILE *stream = stream = fopen(file_path, "r");
 
-    if ((l_socket = socket(AF_INET, SOCK_STREAM,0)) < 0){
-        fprintf(stderr, "ERROR #2: cannot create listening socket.\n");
-        return -1;
+    char* buffer = 0;
+    long length;
+
+    fseek (stream, 0, SEEK_END);
+    length = ftell(stream);
+    fseek (stream, 0, SEEK_SET);
+    buffer = malloc (length);
+    
+    if (buffer == NULL) {
+        fprintf(stderr, "Failed to read file");
+        return 1;
     }
 
-    if (bind(l_socket, (struct sockaddr *)&servaddr,sizeof(servaddr)) < 0){
-        fprintf(stderr, "ERROR #3: bind listening socket.\n");
-        return -1;
+    fread(buffer, 1, length, stream);
+
+    triton_json_t json;
+    triton_parse_result_t result = triton_parse_json(&json, buffer);
+
+    if(result.code == TRITON_ERROR) {
+        printf("Failed to parse config file\n");
     }
 
-    if (listen(l_socket, 5) < 0){
-        fprintf(stderr, "ERROR #4: error in listen().\n");
-        return -1;
-    }     
+    triton_value_entry_t* role = triton_object_get(&json.value.as.object, 0);
+    ++role->value.as.string;
+    role->value.as.string[strlen(role->value.as.string) - 1] = '\0';
 
-    return l_socket;
+    triton_value_entry_t* port = triton_object_get(&json.value.as.object, 1);
+    ++port->value.as.string;
+    port->value.as.string[strlen(port->value.as.string) - 1] = '\0';
+
+    if(strcmp(role->value.as.string, "master") == 0) {
+        config->type = NODE_MASTER;
+    } else {
+        config->type = NODE_SLAVE;
+    }
+
+    config->port = atoi(port->value.as.string);
+
+    if ((config->port < 1) || (config->port > 65535)){
+        fprintf(stderr, "ERROR #1: invalid port specified.\n");
+        exit(1);
+    }
+
+    if(config->type == NODE_SLAVE) {
+        triton_value_entry_t* connect = triton_object_get(&json.value.as.object, 2);
+        ++connect->value.as.string;
+        connect->value.as.string[strlen(connect->value.as.string) - 1] = '\0';
+
+        config->connect = atoi(connect->value.as.string);
+
+        if ((config->connect < 1) || (config->connect > 65535)){
+            fprintf(stderr, "ERROR #1: invalid port specified.\n");
+            exit(1);
+        }
+    }
+
+    fclose (stream);
 }
 
-duplex_socket_t initialize_duplex_connection(socket_t l_socket, unsigned int target_port) {
-    duplex_socket_t duplex;
-    duplex.recv = -1;
-    duplex.send = -1;
+void accept_callback(sock_t* listen, duplex_sock_t* sock) {
+    node_state_t* state = (node_state_t*) listen->user_ptr;
 
-    struct sockaddr_in servaddr;
-    memset(&servaddr,0, sizeof(servaddr));
-    servaddr.sin_family = AF_INET;
-    servaddr.sin_port = htons(target_port);
+    vector_push(&state->sockets, sock);
 
-    if ((duplex.send = socket(AF_INET, SOCK_STREAM, 0))< 0){
-        fprintf(stderr,"ERROR #2: cannot create socket.\n");
-        exit(1);
-    }
-
-    if (inet_aton("127.0.0.1", &servaddr.sin_addr) <= 0 ) {
-        fprintf(stderr,"ERROR #3: Invalid remote IP address.\n");
-        exit(1);
-    }
-
-    if (connect(duplex.send, (struct sockaddr*)&servaddr,sizeof(servaddr)) < 0){
-        fprintf(stderr,"ERROR #4: error in connect().\n");
-        exit(1);
-    }
-
-    struct sockaddr_in clientaddr;
-    unsigned int clientaddrlen = sizeof(clientaddr);
-    memset(&clientaddr, 0, clientaddrlen);
-    duplex.recv = accept(l_socket, (struct sockaddr*) &clientaddr, &clientaddrlen);
-
-    return duplex;
+    printf("Node accepted new duplex connection\n");
 }
 
+int main(int argc, char *argv[]) {
+    node_config_t config;
+    load_node_config(&config, argv[1]);
 
-duplex_socket_t handle_incoming_duplex_connection(socket_t l_socket) {
-    duplex_socket_t duplex;
-    duplex.recv = -1;
-    duplex.send = -1;
+    node_state_t state;
+    sock_create_listen_ptr(&state.listen, config.port, &state);
+    create_vector(&state.sockets, 100);
+    state.listen.accept_callback = accept_callback;
 
-    // Accept listening and setup as duplex recv
-    struct sockaddr_in clientaddr;
-    unsigned int clientaddrlen = sizeof(clientaddr);
-    memset(&clientaddr, 0, clientaddrlen);
-
-    duplex.recv = accept(l_socket, (struct sockaddr*) &clientaddr, &clientaddrlen);
-    printf("Accepting connection from:  %s\n", inet_ntoa(clientaddr.sin_addr));
-    printf("Created recv duplex\n");
-
-    struct sockaddr_in servaddr;
-    memset(&servaddr,0, sizeof(servaddr));
-    servaddr.sin_family = AF_INET;
-    servaddr.sin_port = htons(11111);
-
-    // Create send socket
-    if ((duplex.send = socket(AF_INET, SOCK_STREAM, 0))< 0) {
-        fprintf(stderr,"ERROR #2: cannot create socket.\n");
-        exit(1);
+    if(config.type == NODE_SLAVE) {
+        duplex_sock_t* sock = (duplex_sock_t*) malloc(sizeof(duplex_sock_t));
+        sock_start_duplex_sock(&state.listen, sock, config.connect);
+        vector_push(&state.sockets, sock);  
     }
 
-    if (inet_aton(inet_ntoa(clientaddr.sin_addr), &servaddr.sin_addr) <= 0 ) {
-        fprintf(stderr,"ERROR #3: Invalid remote IP address.\n");
-        exit(1);
-    }
-
-    if (connect(duplex.send, (struct sockaddr*)&servaddr,sizeof(servaddr)) < 0){
-        fprintf(stderr,"ERROR #4: error in connect().\n");
-        exit(1);
-    }
-
-    printf("Created send duplex\n");
-
-    return duplex;
-}
-
-int main(int argc, char *argv[]){
-    unsigned int port = get_port(argv[1]);
-    socket_t l_socket = setup_listening_socket(port);
-
-    duplex_socket_t duplex;
-    duplex.recv = -1;
-    duplex.send = -1;
-
-    // establish connection request
-    if(argc == 3)
-       duplex = initialize_duplex_connection(l_socket, get_port(argv[2]));
-
-    int maxfd = 0;
     for (;;){
-        fd_set read_set;
-        FD_ZERO(&read_set);
+        sock_pull(&state.listen, state.sockets.items, state.sockets.stored);
 
-        if(duplex.recv != -1) {
-            FD_SET(duplex.recv, &read_set);
-            if (duplex.recv > maxfd){
-                maxfd = duplex.recv;
-            }
-        }
+        for(int i = 0; i < state.sockets.stored; ++i) {
+            duplex_sock_t* duplex = state.sockets.items[i];
+            
+            const char* message = "This is a test message";
+            unsigned int length = strlen(message);
 
-        FD_SET(l_socket, &read_set);
-        if (l_socket > maxfd){
-            maxfd = l_socket;
-        }
-        
-        select(maxfd + 1, &read_set, NULL, NULL, NULL);
-
-        // handle incoming request
-        if(duplex.recv == -1 && duplex.send == -1) {
-            if (FD_ISSET(l_socket, &read_set)){
-                duplex = handle_incoming_duplex_connection(l_socket);
-            }
-        }
-
-        // accept message from duplex
-        if(duplex.recv != -1) {
-            if (FD_ISSET(duplex.recv, &read_set)) {
-                char buffer[BUFFLEN];
-
-                memset(&buffer,0,BUFFLEN);
-                int r_len = recv(duplex.recv, &buffer,BUFFLEN,0);
-
-                printf("Recived message from duplex port thing: %s\n", buffer);
-            }
-        }
-
-        // send message to duplex
-        if(duplex.send != -1) {
-            char buffer[100] = { '\0' };
-            sprintf(buffer, "This is message from %s", argv[1]);
-
-            int w_len = send(duplex.send, buffer, sizeof(buffer), 0);
-
-            if (w_len <= 0){
-                printf("Failed to send");
-                exit(1);
-            }
+            sock_duplex_send(duplex, message, length);
         }
     }
 

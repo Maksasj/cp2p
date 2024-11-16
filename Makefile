@@ -15,4 +15,4 @@ clean:
 	rm -rf $(OBJ)
 
 execute:
-	./$(EXE) 44444
+	./$(EXE) master.json

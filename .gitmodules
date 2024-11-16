@@ -1,0 +1,6 @@
+[submodule "haul"]
+	path = haul
+	url = git@github.com:Maksasj/haul.git
+[submodule "triton"]
+	path = triton
+	url = git@github.com:Maksasj/triton.git
