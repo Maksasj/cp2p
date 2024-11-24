@@ -4,3 +4,6 @@
 [submodule "triton"]
 	path = triton
 	url = git@github.com:Maksasj/triton.git
+[submodule "caifu"]
+	path = caifu
+	url = git@github.com:Maksasj/caifu.git

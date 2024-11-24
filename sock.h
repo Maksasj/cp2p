@@ -10,6 +10,9 @@
 #include <string.h>
 #include <unistd.h>
 
+#define PLUM_IMPLEMENTATION
+#include "caifu/plum/plum.h"
+
 struct sock_t;
 struct duplex_sock_t;
 
@@ -50,31 +53,40 @@ sock_result_t sock_pull(sock_t* listen, duplex_sock_t** pool, unsigned int count
 #ifdef SOCK_IMPLEMENETATION
 
 sock_result_t sock_start_duplex_sock(sock_t* sock, duplex_sock_t* duplex, unsigned int port) {
+    PLUM_LOG(PLUM_TRACE, "Starting duplex socket");
+
+    if ((duplex->send.socket = socket(AF_INET, SOCK_STREAM, 0))< 0){
+        PLUM_LOG(PLUM_ERROR, "Cannot create socket");
+        exit(1);
+    }
+
+    PLUM_LOG(PLUM_TRACE, "Created socket with port %d", port);
+
     struct sockaddr_in servaddr;
-    memset(&servaddr,0, sizeof(servaddr));
+    memset(&servaddr, 0, sizeof(servaddr));
     servaddr.sin_family = AF_INET;
     servaddr.sin_port = htons(port);
 
-    if ((duplex->send.socket = socket(AF_INET, SOCK_STREAM, 0))< 0){
-        fprintf(stderr,"ERROR #2: cannot create socket.\n");
-        exit(1);
-    }
-
     if (inet_aton("127.0.0.1", &servaddr.sin_addr) <= 0 ) {
-        fprintf(stderr,"ERROR #3: Invalid remote IP address.\n");
+        PLUM_LOG(PLUM_ERROR, "Invalid remote ID adress");
         exit(1);
     }
 
-    if (connect(duplex->send.socket, (struct sockaddr*)&servaddr,sizeof(servaddr)) < 0){
-        fprintf(stderr,"ERROR #4: error in connect().\n");
+    PLUM_LOG(PLUM_TRACE, "Connecting to '127.0.0.1:%d'", port);
+
+    if (connect(duplex->send.socket, (struct sockaddr*) &servaddr, sizeof(servaddr)) < 0){
+        PLUM_LOG(PLUM_ERROR, "Error in connect()");
         exit(1);
     }
 
     struct sockaddr_in clientaddr;
     unsigned int clientaddrlen = sizeof(clientaddr);
     memset(&clientaddr, 0, clientaddrlen);
-    duplex->recv.socket = accept(sock->socket, (struct sockaddr*) &clientaddr, &clientaddrlen);
 
+    duplex->recv.socket = accept(sock->socket, (struct sockaddr*) &clientaddr, &clientaddrlen);
+    PLUM_LOG(PLUM_TRACE, "Accepted duplex recv socket");
+
+    PLUM_LOG(PLUM_TRACE, "Started duplex sock");
     return (sock_result_t){ .code = SOCK_OK };
 }
 
@@ -85,36 +97,40 @@ sock_result_t sock_accept_duplex_sock(sock_t* sock, duplex_sock_t* duplex) {
     memset(&clientaddr, 0, clientaddrlen);
 
     duplex->recv.socket = accept(sock->socket, (struct sockaddr*) &clientaddr, &clientaddrlen);
-    printf("Accepting connection from:  %s\n", inet_ntoa(clientaddr.sin_addr));
-    printf("Created recv duplex\n");
+    PLUM_LOG(PLUM_INFO, "Accepting connection from %s", inet_ntoa(clientaddr.sin_addr));
 
     struct sockaddr_in servaddr;
     memset(&servaddr,0, sizeof(servaddr));
     servaddr.sin_family = AF_INET;
-    servaddr.sin_port = htons(44444); // Todo
+    servaddr.sin_port = htons(11111); // Todo
 
     // Create send socket
+    PLUM_LOG(PLUM_INFO, "Creating send socket");
+
     if ((duplex->send.socket = socket(AF_INET, SOCK_STREAM, 0))< 0) {
-        fprintf(stderr,"ERROR #2: cannot create socket.\n");
+        PLUM_LOG(PLUM_ERROR, "Cannot create socket");
         exit(1);
     }
+
+    PLUM_LOG(PLUM_TRACE, "Created socket with port %d", 11111);
 
     if (inet_aton(inet_ntoa(clientaddr.sin_addr), &servaddr.sin_addr) <= 0 ) {
-        fprintf(stderr,"ERROR #3: Invalid remote IP address.\n");
+        PLUM_LOG(PLUM_ERROR, "Invalid remote IP address");
         exit(1);
     }
 
-    if (connect(duplex->send.socket, (struct sockaddr*)&servaddr,sizeof(servaddr)) < 0){
-        fprintf(stderr,"ERROR #4: error in connect().\n");
+    if (connect(duplex->send.socket, (struct sockaddr*) &servaddr, sizeof(servaddr)) < 0){
+        PLUM_LOG(PLUM_ERROR, "Error in connect()");
         exit(1);
     }
 
-    printf("Created send duplex\n");
-
+    PLUM_LOG(PLUM_INFO, "Created send duplex");
     return (sock_result_t){ .code = SOCK_OK };
 }
 
 sock_result_t sock_create_listen(sock_t* sock, port_t port) {
+    PLUM_LOG(PLUM_TRACE, "Creating listening socket");
+
     struct sockaddr_in servaddr;
     memset(&servaddr, 0, sizeof(servaddr));
     
@@ -125,11 +141,15 @@ sock_result_t sock_create_listen(sock_t* sock, port_t port) {
     if ((sock->socket = socket(AF_INET, SOCK_STREAM,0)) < 0)
         return (sock_result_t) { .code = SOCK_ERROR, .message = "Cannot create listening socket" };
 
+    PLUM_LOG(PLUM_TRACE, "Created socket with port %d", port);
+
     if (bind(sock->socket, (struct sockaddr *)&servaddr,sizeof(servaddr)) < 0)
         return (sock_result_t) { .code = SOCK_ERROR, .message = "Failed to bind listening socket" };
 
     if (listen(sock->socket, 5) < 0)
         return (sock_result_t){ .code = SOCK_ERROR, .message = "Failed to listen()"};
+
+    PLUM_LOG(PLUM_TRACE, "Created listening socket");
 
     return (sock_result_t){ .code = SOCK_OK };
 }
@@ -175,10 +195,12 @@ sock_result_t sock_pull(sock_t* listen, duplex_sock_t** pool, unsigned int count
     if (listen->socket > maxfd)
         maxfd = listen->socket;
     
+    PLUM_LOG(PLUM_TRACE, "Blocking with select()");
     select(maxfd + 1, &read_set, NULL, NULL, NULL);
 
     // handle incoming request
-    if (FD_ISSET(listen->socket, &read_set)){
+    if (FD_ISSET(listen->socket, &read_set)) {
+        PLUM_LOG(PLUM_INFO, "Accepting duplex socket connection");
         duplex_sock_t* duplex = (duplex_sock_t*) malloc(sizeof(duplex_sock_t));
         sock_accept_duplex_sock(listen, duplex);
 
@@ -186,6 +208,8 @@ sock_result_t sock_pull(sock_t* listen, duplex_sock_t** pool, unsigned int count
     }
 
     for(int i = 0; i < count; ++i) {
+        PLUM_LOG(PLUM_INFO, "Receiving message from duplex socket");
+
         duplex_sock_t* duplex = pool[i];
 
         if(duplex->recv.socket != -1) {
@@ -195,7 +219,7 @@ sock_result_t sock_pull(sock_t* listen, duplex_sock_t** pool, unsigned int count
                 memset(&buffer, 0, 1024);
                 int r_len = recv(duplex->recv.socket, &buffer, 1024,0);
 
-                printf("Recived message from duplex port thing: %s\n", buffer);
+                PLUM_LOG(PLUM_EXPERIMENTAL, "Received message from duplex port thing: %s", buffer);
             }
         }
     }
