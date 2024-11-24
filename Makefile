@@ -9,7 +9,7 @@ $(EXE): $(OBJ)
 	$(CC) $(OBJ) -o $@
 
 .o: .c
-	$(CC) -c $< -o $@
+	$(CC) -c -lpthread $< -o $@
 
 clean:
 	rm -rf $(OBJ)

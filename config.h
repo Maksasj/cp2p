@@ -7,6 +7,8 @@
 #define PLUM_IMPLEMENTATION
 #include "caifu/plum/plum.h"
 
+typedef unsigned int port_t;
+
 typedef enum {
     NODE_MASTER,
     NODE_SLAVE
