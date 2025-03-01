@@ -1,4 +1,5 @@
 {
     "role": "master",
+    "name": "master",
     "port": "44444"
 }

@@ -16,19 +16,22 @@
 #include "socket.h"
 
 typedef struct {
+    struct {
+        char address[32];
+        unsigned int port;
+    } source;
+    
     enum {
-        PING_PACKET
+        PING_PACKET,
+        BROADCAST_CONNECT_REQUEST,
     } type;
-
+    
     union {
-        struct {
-            
-        } ping;
+        struct { } ping;
+        struct { 
+            int life; 
+        } broadcast_connect_request;
     } as;
 } packet_t;
-
-void send_packet(send_sock_t socket, packet_t packet) {
-    write(socket.socket, &packet, sizeof(packet));
-}
 
 #endif

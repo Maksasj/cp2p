@@ -1,0 +1,6 @@
+{
+    "role": "slave",
+    "name": "slave11",
+    "port": "11122",
+    "connect": "11111"
+}

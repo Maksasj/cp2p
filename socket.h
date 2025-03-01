@@ -5,6 +5,9 @@ typedef unsigned int socket_t;
 
 typedef struct {
     socket_t socket;
+
+    char address[32];
+    unsigned int port;
 } send_sock_t;
 
 typedef struct {
